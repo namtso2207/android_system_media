@@ -144,6 +144,24 @@ unsigned profile_get_default_sample_rate(const alsa_device_profile* profile)
      * TODO this won't be right in general. we should store a preferred rate as we are scanning.
      * But right now it will return the highest rate, which may be correct.
      */
+     if(profile_is_valid(profile))
+     {
+      size_t index;
+      for (index = 0; profile->sample_rates[index] != 0; index++) {
+            if (profile->sample_rates[index] == DEFAULT_SAMPLE_RATE) {
+                return DEFAULT_SAMPLE_RATE;
+            }
+       }
+	  for (index = 0; profile->sample_rates[index] != 0; index++) {
+            if (profile->sample_rates[index] == 48000) {
+                return  48000;
+            }
+       }
+	  return profile->sample_rates[0];
+	 }else{
+       return DEFAULT_SAMPLE_RATE;
+	 }
+     
     return profile_is_valid(profile) ? profile->sample_rates[0] : DEFAULT_SAMPLE_RATE;
 }
 
@@ -274,7 +292,8 @@ static unsigned profile_enum_sample_rates(alsa_device_profile* profile, unsigned
 {
     unsigned num_entries = 0;
     unsigned index;
-
+	unsigned j;
+    unsigned temp;
     for (index = 0; index < ARRAY_SIZE(std_sample_rates) &&
                     num_entries < ARRAY_SIZE(profile->sample_rates) - 1;
          index++) {
@@ -282,6 +301,26 @@ static unsigned profile_enum_sample_rates(alsa_device_profile* profile, unsigned
                 && profile_test_sample_rate(profile, std_sample_rates[index])) {
             profile->sample_rates[num_entries++] = std_sample_rates[index];
         }
+    }
+	
+	//排序
+    for(index=0;index<num_entries;index++)
+    {
+		for(j=1+index;j<num_entries;j++)
+		{
+           if(profile->sample_rates[index]>profile->sample_rates[j])
+           	{
+           	  temp=profile->sample_rates[index];
+			  profile->sample_rates[index]= profile->sample_rates[j];
+			  profile->sample_rates[j]=temp;
+
+		    }
+		}
+    }
+	for(index=0;index<num_entries;index++)
+    {
+		 ALOGV("ldp    profile->sample_rates>=%u",profile->sample_rates[index]);
+		
     }
     profile->sample_rates[num_entries] = 0; /* terminate */
     return num_entries; /* return # of supported rates */
@@ -380,13 +419,13 @@ static int read_alsa_device_config(alsa_device_profile * profile, struct pcm_con
     if (profile->card < 0 || profile->device < 0) {
         return -EINVAL;
     }
-
+    //从硬件设备中获取到pcm_params * alsa_hw_params结构体
     struct pcm_params * alsa_hw_params =
         pcm_params_get(profile->card, profile->device, profile->direction);
     if (alsa_hw_params == NULL) {
         return -EINVAL;
     }
-
+   
     profile->min_period_size = pcm_params_get_min(alsa_hw_params, PCM_PARAM_PERIOD_SIZE);
     profile->max_period_size = pcm_params_get_max(alsa_hw_params, PCM_PARAM_PERIOD_SIZE);
 
@@ -411,13 +450,20 @@ static int read_alsa_device_config(alsa_device_profile * profile, struct pcm_con
     }
     config->rate = pcm_params_get_min(alsa_hw_params, PCM_PARAM_RATE);
     // Prefer 48K or 44.1K
-    if (config->rate < 48000 &&
-        pcm_params_get_max(alsa_hw_params, PCM_PARAM_RATE) >= 48000) {
-        config->rate = 48000;
-    } else if (config->rate < 44100 &&
-               pcm_params_get_max(alsa_hw_params, PCM_PARAM_RATE) >= 44100) {
-        config->rate = 44100;
-    }
+     ALOGV("usb:audio_hw - read_alsa_device_config   config->rate>=%u",
+          config->rate );
+	if(config->rate !=44100)
+	{
+		if (config->rate < 48000 &&
+				pcm_params_get_max(alsa_hw_params, PCM_PARAM_RATE) >= 48000) {
+				config->rate = 48000;
+			} else if (config->rate < 44100 &&
+					   pcm_params_get_max(alsa_hw_params, PCM_PARAM_RATE) >= 44100) {
+				config->rate = 44100;
+		}
+	}
+		
+    
     config->period_size = profile_calc_min_period_size(profile, config->rate);
     config->period_count = pcm_params_get_min(alsa_hw_params, PCM_PARAM_PERIODS);
     config->format = get_pcm_format_for_mask(pcm_params_get_mask(alsa_hw_params, PCM_PARAM_FORMAT));
@@ -432,14 +478,16 @@ static int read_alsa_device_config(alsa_device_profile * profile, struct pcm_con
 
     return ret;
 }
-
+/*填充device_info->profile结构体*/
 bool profile_read_device_info(alsa_device_profile* profile)
 {
     if (!profile_is_initialized(profile)) {
         return false;
     }
 
-    /* let's get some defaults */
+    /* let's get some defaults 
+    从硬件设备获取profile->default_config和profile需要的值
+	*/
     read_alsa_device_config(profile, &profile->default_config);
     ALOGV("default_config chans:%d rate:%d format:%d count:%d size:%d",
           profile->default_config.channels, profile->default_config.rate,
